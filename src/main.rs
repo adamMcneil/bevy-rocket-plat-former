@@ -14,18 +14,18 @@ use serde::{Deserialize, Serialize};
 use bevy::prelude::*;
 
 #[derive(Resource)]
-struct BevyReceiver(Arc<Mutex<Receiver<Movement>>>);
+struct BevyReceiver(Arc<Mutex<Receiver<RocketMessage>>>);
 
 #[derive(Serialize, Deserialize, Debug)]
 enum Movement {
     Right,
-    EndRight (String),
-    Left (String),
-    EndLeft (String),
-    Jump (String),
-    Dive (String),
-    Join (String),
-    Leave (String),
+    EndRight,
+    Left,
+    EndLeft,
+    Jump,
+    Dive,
+    Join,
+    Leave,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -69,9 +69,12 @@ fn receive_message(receiver: Res<BevyReceiver>) {
 }
 
 fn main() {
-    // let rocket_message = RocketMessage{player = }
-    println!("{}", serde_json::to_string(&Movement::Right).unwrap());
-    let (transmitter, receiver): (Sender<Movement>, Receiver<Movement>) = mpsc::channel();
+    let rocket_message = RocketMessage {
+        player: "Adam".to_string(),
+        movement: Movement::Right
+    };
+    println!("{}", serde_json::to_string(&rocket_message).unwrap());
+    let (transmitter, receiver): (Sender<RocketMessage>, Receiver<RocketMessage>) = mpsc::channel();
 
     let rocket_thread = thread::spawn(move || {
         rocket::custom(
