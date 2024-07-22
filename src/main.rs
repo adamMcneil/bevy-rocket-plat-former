@@ -1,8 +1,12 @@
 #![feature(proc_macro_hygiene, decl_macro)]
-#[macro_use]
 extern crate rocket;
+use rocket::http::Method;
+use rocket::{
+    get, post, routes,
+};
 use rocket::{Config, State};
 use rocket_contrib::json::Json;
+use rocket_cors::{AllowedOrigins, CorsOptions};
 
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
@@ -39,29 +43,18 @@ fn heartbeat() -> &'static str {
     "heartbeat"
 }
 
-// #[get("/")]
-// fn index(transmitter: State<Sender<String>>) -> Result<()> {
-//     transmitter.send("Hello".to_string()).unwrap();
-//     Ok(())
-//     // println!("{}", message.0.to_string());
-// }
-
-// #[post("/new/<player>")]
-// fn add_player(player: String, transmitter: State<Sender<RocketMessage>>) -> String {
-//     transmitter.send(geunwrap();
-//     player
-// }
-
 #[post("/control", data = "<rocket_message>")]
 fn control_player(rocket_message: Json<RocketMessage>, transmitter: State<Sender<RocketMessage>>) {
-    transmitter.send(rocket_message.into_inner()).unwrap();
+    // println!("{:?}", rocket_message);
+    let _ = transmitter.send(rocket_message.into_inner());
 }
 
 fn receive_message(receiver: Res<BevyReceiver>) {
     match receiver.0.lock() {
         Ok(receiver) => {
             if let Ok(message) = receiver.try_recv() {
-                println!("{}", serde_json::to_string(&message).unwrap())
+                // println!("here");
+                println!("{}", serde_json::to_string(&message).unwrap());
             }
         }
         Err(_) => (),
@@ -71,12 +64,23 @@ fn receive_message(receiver: Res<BevyReceiver>) {
 fn main() {
     let rocket_message = RocketMessage {
         player: "Adam".to_string(),
-        movement: Movement::Right
+        movement: Movement::Right,
     };
     println!("{}", serde_json::to_string(&rocket_message).unwrap());
     let (transmitter, receiver): (Sender<RocketMessage>, Receiver<RocketMessage>) = mpsc::channel();
 
     let rocket_thread = thread::spawn(move || {
+        let cors = CorsOptions::default()
+            .allowed_origins(AllowedOrigins::all())
+            .allowed_methods(
+                vec![Method::Get, Method::Post]
+                    .into_iter()
+                    .map(From::from)
+                    .collect(),
+            )
+            .allow_credentials(true)
+            .to_cors();
+
         rocket::custom(
             Config::build(rocket::config::Environment::Staging)
                 .address("0.0.0.0")
@@ -85,6 +89,7 @@ fn main() {
         )
         .manage(transmitter)
         .mount("/api/v1", routes![heartbeat, control_player])
+        .attach(cors.unwrap())
         .launch();
     });
 
