@@ -28,6 +28,7 @@ enum Movement {
     EndLeft,
     Jump,
     Dive,
+    EndDive,
     Join,
     Leave,
 }
