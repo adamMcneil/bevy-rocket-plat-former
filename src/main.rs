@@ -1,12 +1,6 @@
 #![feature(proc_macro_hygiene, decl_macro)]
-extern crate rocket;
-use rocket::http::Method;
-use rocket::{get, post, routes};
-use rocket::{Config, State};
-use rocket_contrib::json::Json;
-use rocket_cors::{AllowedOrigins, CorsOptions};
 
-use std::collections::HashSet;
+use std::str::FromStr;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -15,6 +9,10 @@ use std::thread;
 use serde::{Deserialize, Serialize};
 
 use bevy::prelude::*;
+
+use std::net::TcpListener;
+use std::thread::spawn;
+use tungstenite::accept;
 
 #[derive(Resource)]
 struct BevyReceiver(Arc<Mutex<Receiver<RocketMessage>>>);
@@ -32,83 +30,66 @@ enum Movement {
     Leave,
 }
 
+impl FromStr for Movement {
+    type Err = &'static str;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "Right" => Ok(Movement::Right),
+            "EndRight" => Ok(Movement::EndRight),
+            "Left" => Ok(Movement::Left),
+            "EndLeft" => Ok(Movement::EndLeft),
+            "Jump" => Ok(Movement::Jump),
+            "Dive" => Ok(Movement::Dive),
+            "EndDive" => Ok(Movement::EndDive),
+            "Join" => Ok(Movement::Join),
+            "Leave" => Ok(Movement::Leave),
+            _ => Err("Unknown movement"),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 struct RocketMessage {
     player: String,
     movement: Movement,
+    time: u128,
 }
 
-#[get("/heartbeat")]
-fn heartbeat() -> &'static str {
-    "heartbeat"
-}
+use std::time::{SystemTime, UNIX_EPOCH};
 
-#[post("/control", data = "<rocket_message>")]
-fn control_player(
-    rocket_message: Json<RocketMessage>,
-    players: State<HashSet<String>>,
-    transmitter: State<Sender<RocketMessage>>,
-) -> Result<(), ()> {
-    let rocket_message = rocket_message.into_inner();
-    // if players.contains(&rocket_message.player) {
-    //     match rocket_message.movement {
-    //         Movement::Join => {
-    //             Err(())
-    //         },
-    //         Movement::Leave => {
-    //             players.remove(&rocket_message.player);
-    //             transmitter.send(rocket_message);
-    //             Ok(())
-    //         }
-    //         _ => {
-    //             transmitter.send(rocket_message);
-    //             Ok(())
-    //         },
-    //     }
-    // } else {
-    //     match rocket_message.movement {
-    //         Movement::Join => {
-    //             players.insert(rocket_message.player.clone());
-    //             transmitter.send(rocket_message);
-    //             Ok(())
-    //         },
-    //         _ => {
-    //             Err(())
-    //         },
-    //     }
-    // }
-    let _ = transmitter.send(rocket_message);
-    Ok(())
+fn millis() -> u128 {
+    let start = SystemTime::now();
+    let since_the_epoch = start
+        .duration_since(UNIX_EPOCH)
+        .expect("Time went backwards");
+    since_the_epoch.as_millis()
 }
 
 fn main() {
     let (transmitter, receiver): (Sender<RocketMessage>, Receiver<RocketMessage>) = mpsc::channel();
 
-    let rocket_thread = thread::spawn(move || {
-        let players: HashSet<String> = HashSet::new();
-        let cors = CorsOptions::default()
-            .allowed_origins(AllowedOrigins::all())
-            .allowed_methods(
-                vec![Method::Get, Method::Post]
-                    .into_iter()
-                    .map(From::from)
-                    .collect(),
-            )
-            .allow_credentials(true)
-            .to_cors();
+    let web_socket_thread = thread::spawn(move || {
+        let server = TcpListener::bind("10.0.0.21:9001").unwrap();
+        println!("Server is listing");
+        for stream in server.incoming() {
+            let connection_transmitter = transmitter.clone();
+            spawn (move || {
+                let mut websocket = accept(stream.unwrap()).unwrap();
+                println!("Connection successful");
+                loop {
+                    let msg = websocket.read().unwrap();
+                    println!("{}", msg);
 
-        rocket::custom(
-            Config::build(rocket::config::Environment::Staging)
-                // .tls(certs_path, key_path)
-                .address("0.0.0.0")
-                .finalize()
-                .unwrap(),
-        )
-        .manage(transmitter)
-        .manage(players)
-        .mount("/api/v1", routes![heartbeat, control_player])
-        .attach(cors.unwrap())
-        .launch();
+                    let _ = connection_transmitter.send(RocketMessage {
+                        player: "Adam".to_string(),
+                        movement: Movement::from_str(&msg.to_string()).unwrap(),
+                        time: 1
+                    });
+
+                }
+            });
+        }
     });
 
     let bevy_receiver = BevyReceiver(Arc::new(Mutex::new(receiver)));
@@ -122,7 +103,7 @@ fn main() {
         .add_systems(Startup, (spawn_cam, spawn_sprite))
         .run();
 
-    rocket_thread.join().expect("Rocket thread panicked");
+    web_socket_thread.join().expect("Web socket thread panicked");
 }
 
 #[derive(Component)]
@@ -161,8 +142,10 @@ fn move_sprite(mut sprite: Query<&mut Transform, With<Sprite>>, current_movement
 fn receive_message(receiver: Res<BevyReceiver>, mut current_movement: ResMut<Movement>) {
     match receiver.0.lock() {
         Ok(receiver) => {
-            if let Ok(message) = receiver.try_recv() {
+            while let Ok(message) = receiver.try_recv() {
                 println!("{}", serde_json::to_string(&message).unwrap());
+                println!("{}", millis() - message.time);
+
                 *current_movement = message.movement 
             }
         }
