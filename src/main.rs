@@ -22,9 +22,8 @@ struct BevyReceiver(Arc<Mutex<Receiver<RocketMessage>>>);
 #[derive(Serialize, Deserialize, Debug, Resource)]
 enum Movement {
     Right,
-    EndRight,
     Left,
-    EndLeft,
+    None,
     Jump,
     Dive,
     EndDive,
@@ -38,9 +37,8 @@ impl FromStr for Movement {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "Right" => Ok(Movement::Right),
-            "EndRight" => Ok(Movement::EndRight),
             "Left" => Ok(Movement::Left),
-            "EndLeft" => Ok(Movement::EndLeft),
+            "None" => Ok(Movement::None),
             "Jump" => Ok(Movement::Jump),
             "Dive" => Ok(Movement::Dive),
             "EndDive" => Ok(Movement::EndDive),
@@ -55,7 +53,7 @@ impl FromStr for Movement {
 struct RocketMessage {
     player: String,
     movement: Movement,
-    time: u128,
+    //time: u128,
 }
 
 #[derive(Resource)]
@@ -98,7 +96,7 @@ fn main() {
     });
 
     let bevy_receiver = BevyReceiver(Arc::new(Mutex::new(receiver)));
-    let current_movement: Movement = Movement::EndLeft;
+    let current_movement: Movement = Movement::None;
     let players: Players = Players {
         players: HashSet::new(),
         players_current_move: HashMap::new(),
@@ -113,7 +111,16 @@ fn main() {
         .add_event::<Join>()
         .add_event::<Jump>()
         .add_systems(Startup, spawn_cam)
-        .add_systems(Update, (receive_message, move_sprite, gravity, handle_jump, join_game))
+        .add_systems(
+            Update,
+            (
+                receive_message,
+                move_sprite,
+                gravity,
+                handle_jump,
+                join_game,
+            ),
+        )
         .run();
 
     web_socket_thread
@@ -140,12 +147,12 @@ struct Jumping;
 
 #[derive(Event)]
 struct Join {
-    player: String
+    player: String,
 }
 
 #[derive(Event)]
 struct Jump {
-    player: String
+    player: String,
 }
 
 fn spawn_cam(mut commands: Commands) {
@@ -157,7 +164,6 @@ fn join_game(mut join_ev: EventReader<Join>, mut commands: Commands, mut players
         spawn_sprite(event.player.clone(), &mut commands);
         players.players.insert(event.player.clone());
     }
-
 }
 
 fn handle_jump(mut players: Query<(&mut Player)>, mut jump_ev: EventReader<Jump>) {
@@ -169,7 +175,6 @@ fn handle_jump(mut players: Query<(&mut Player)>, mut jump_ev: EventReader<Jump>
             }
         }
     }
-
 }
 
 fn spawn_sprite(name: String, commands: &mut Commands) {
@@ -192,7 +197,6 @@ fn spawn_sprite(name: String, commands: &mut Commands) {
 }
 
 fn move_sprite(mut transforms: Query<(&mut Transform, &mut Player)>, players: Res<Players>) {
-
     for (mut transform, player) in &mut transforms {
         let player = player.into_inner();
         if let Some(player_movement) = players.players_current_move.get(&player.name) {
@@ -238,14 +242,20 @@ fn receive_message(
             while let Ok(message) = receiver.try_recv() {
                 match message.movement {
                     Movement::Join => {
-                        join_ev.send(Join {player: message.player});
+                        join_ev.send(Join {
+                            player: message.player,
+                        });
                     }
                     Movement::Jump => {
-                        jump_ev.send(Jump{player: message.player});
+                        jump_ev.send(Jump {
+                            player: message.player,
+                        });
                     }
                     _ => {
-                        players.players_current_move.insert(message.player, message.movement);
-                    },
+                        players
+                            .players_current_move
+                            .insert(message.player, message.movement);
+                    }
                 }
             }
         }

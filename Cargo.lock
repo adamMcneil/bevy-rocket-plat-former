@@ -388,6 +388,7 @@ dependencies = [
 name = "bevy-rocket"
 version = "0.1.0"
 dependencies = [
+ "alsa",
  "bevy",
  "rocket",
  "rocket_contrib",
