@@ -1,13 +1,11 @@
 #![feature(proc_macro_hygiene, decl_macro)]
 
 use std::collections::{HashMap, HashSet};
-use std::str::FromStr;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::thread;
 
-use bevy::ecs::query::{QueryData, QueryFilter};
 use serde::{Deserialize, Serialize};
 
 use bevy::prelude::*;
@@ -17,67 +15,28 @@ use std::thread::spawn;
 use tungstenite::accept;
 
 #[derive(Resource)]
-struct BevyReceiver(Arc<Mutex<Receiver<RocketMessage>>>);
+struct BevyReceiver(Arc<Mutex<Receiver<ControllerState>>>);
 
-#[derive(Serialize, Deserialize, Debug, Resource)]
-enum Movement {
-    Right,
-    Left,
-    None,
-    Jump,
-    Dive,
-    EndDive,
-    Join,
-    Leave,
-}
-
-impl FromStr for Movement {
-    type Err = &'static str;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "Right" => Ok(Movement::Right),
-            "Left" => Ok(Movement::Left),
-            "None" => Ok(Movement::None),
-            "Jump" => Ok(Movement::Jump),
-            "Dive" => Ok(Movement::Dive),
-            "EndDive" => Ok(Movement::EndDive),
-            "Join" => Ok(Movement::Join),
-            "Leave" => Ok(Movement::Leave),
-            _ => Err("Unknown movement"),
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct RocketMessage {
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct ControllerState {
     player: String,
-    movement: Movement,
-    //time: u128,
+    x_movement: f32,
+    jump: bool,
 }
 
 #[derive(Resource)]
 struct Players {
     players: HashSet<String>,
-    players_current_move: HashMap<String, Movement>,
+    players_current_move: HashMap<String, ControllerState>,
     is_jumping: HashSet<String>,
 }
 
-use std::time::{SystemTime, UNIX_EPOCH};
-
-fn millis() -> u128 {
-    let start = SystemTime::now();
-    let since_the_epoch = start
-        .duration_since(UNIX_EPOCH)
-        .expect("Time went backwards");
-    since_the_epoch.as_millis()
-}
-
 fn main() {
-    let (transmitter, receiver): (Sender<RocketMessage>, Receiver<RocketMessage>) = mpsc::channel();
+    let (transmitter, receiver): (Sender<ControllerState>, Receiver<ControllerState>) =
+        mpsc::channel();
 
     let web_socket_thread = thread::spawn(move || {
-        let server = TcpListener::bind("10.0.0.21:8000").unwrap();
+        let server = TcpListener::bind("10.0.0.184:8000").unwrap();
         println!("Server is listing");
         for stream in server.incoming() {
             let connection_transmitter = transmitter.clone();
@@ -87,7 +46,7 @@ fn main() {
                 loop {
                     let msg = websocket.read().unwrap();
                     println!("{}", msg);
-                    let rocket_message: RocketMessage =
+                    let rocket_message: ControllerState =
                         serde_json::from_str(&msg.to_string()).unwrap();
                     let _ = connection_transmitter.send(rocket_message);
                 }
@@ -96,7 +55,6 @@ fn main() {
     });
 
     let bevy_receiver = BevyReceiver(Arc::new(Mutex::new(receiver)));
-    let current_movement: Movement = Movement::None;
     let players: Players = Players {
         players: HashSet::new(),
         players_current_move: HashMap::new(),
@@ -106,7 +64,6 @@ fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
         .insert_resource(bevy_receiver)
-        .insert_resource(current_movement)
         .insert_resource(players)
         .add_event::<Join>()
         .add_event::<Jump>()
@@ -136,7 +93,6 @@ struct Player {
     name: String,
     velocity: Vec2,
     on_ground: bool,
-    // transform: Transform,
 }
 
 #[derive(Component)]
@@ -166,7 +122,7 @@ fn join_game(mut join_ev: EventReader<Join>, mut commands: Commands, mut players
     }
 }
 
-fn handle_jump(mut players: Query<(&mut Player)>, mut jump_ev: EventReader<Jump>) {
+fn handle_jump(mut players: Query<&mut Player>, mut jump_ev: EventReader<Jump>) {
     let jump_strength = 300.0;
     for event in jump_ev.read() {
         for mut p in &mut players {
@@ -197,18 +153,12 @@ fn spawn_sprite(name: String, commands: &mut Commands) {
 }
 
 fn move_sprite(mut transforms: Query<(&mut Transform, &mut Player)>, players: Res<Players>) {
+    let min_x = -500.0;
+    let max_x = 500.0;
     for (mut transform, player) in &mut transforms {
-        let player = player.into_inner();
         if let Some(player_movement) = players.players_current_move.get(&player.name) {
-            match player_movement {
-                Movement::Right => {
-                    transform.translation.x += 5.0;
-                }
-                Movement::Left => {
-                    transform.translation.x -= 5.0;
-                }
-                _ => {}
-            }
+            transform.translation.x += player_movement.x_movement;
+            transform.translation.x = transform.translation.x.clamp(min_x, max_x);
         }
     }
 }
@@ -239,23 +189,28 @@ fn receive_message(
 ) {
     match receiver.0.lock() {
         Ok(receiver) => {
-            while let Ok(message) = receiver.try_recv() {
-                match message.movement {
-                    Movement::Join => {
-                        join_ev.send(Join {
-                            player: message.player,
-                        });
-                    }
-                    Movement::Jump => {
-                        jump_ev.send(Jump {
-                            player: message.player,
-                        });
-                    }
-                    _ => {
-                        players
-                            .players_current_move
-                            .insert(message.player, message.movement);
-                    }
+            while let Ok(controller_update) = receiver.try_recv() {
+                let player_name = controller_update.player.clone();
+
+                // If the player is new, insert them and emit a Join event
+                if !players.players.contains(&player_name) {
+                    players.players.insert(player_name.clone());
+                    join_ev.send(Join {
+                        player: player_name.clone(),
+                    });
+                }
+
+                // Store current movement state
+                players
+                    .players_current_move
+                    .insert(player_name.clone(), controller_update.clone());
+
+                // If the jump flag is set and the player isn't already jumping
+                if controller_update.jump && !players.is_jumping.contains(&player_name) {
+                    jump_ev.send(Jump {
+                        player: player_name.clone(),
+                    });
+                    players.is_jumping.insert(player_name.clone());
                 }
             }
         }
