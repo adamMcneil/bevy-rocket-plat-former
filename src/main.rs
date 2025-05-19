@@ -155,9 +155,10 @@ fn spawn_sprite(name: String, commands: &mut Commands) {
 fn move_sprite(mut transforms: Query<(&mut Transform, &mut Player)>, players: Res<Players>) {
     let min_x = -500.0;
     let max_x = 500.0;
+    let speed = 5.0;
     for (mut transform, player) in &mut transforms {
         if let Some(player_movement) = players.players_current_move.get(&player.name) {
-            transform.translation.x += player_movement.x_movement;
+            transform.translation.x += player_movement.x_movement * speed;
             transform.translation.x = transform.translation.x.clamp(min_x, max_x);
         }
     }
@@ -206,11 +207,10 @@ fn receive_message(
                     .insert(player_name.clone(), controller_update.clone());
 
                 // If the jump flag is set and the player isn't already jumping
-                if controller_update.jump && !players.is_jumping.contains(&player_name) {
+                if controller_update.jump {
                     jump_ev.send(Jump {
                         player: player_name.clone(),
                     });
-                    players.is_jumping.insert(player_name.clone());
                 }
             }
         }
